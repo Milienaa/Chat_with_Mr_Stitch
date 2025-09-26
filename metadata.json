@@ -1,0 +1,5 @@
+{
+  "name": "AP Stitch: Chat with Mr Stitch",
+  "description": "An application where users communicate in project-based dialogues, and an AI, Mr Stitch, generates Action Points on their conversations.",
+  "requestFramePermissions": []
+}
