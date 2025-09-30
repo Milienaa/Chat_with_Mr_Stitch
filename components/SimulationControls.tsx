@@ -10,14 +10,15 @@ interface SimulationControlsProps {
     onAddUsers: (newUserNames: string[]) => void;
 }
 
-const PROMPT_TEMPLATE = `Згенеруй дискусію на тему [впровадження нової дизайн-системи].
-Де зімітуєш Slack-чат на [30-40] повідомлень.
-Діалог почнеться із [оптимістичного настрою].
-Ініціатор буде [Максим].
-Супротив йому складе [Андрій], він переживає за терміни.
-Максимальний скептик [Антон], він вважає, що стара система краща.
-Злагоджує конфлікт [Настя].
-Ділог має завершитись на [домовленості].`;
+const PROMPT_TEMPLATE = `Тема: [Впровадження нової дизайн-системи]
+Кількість повідомлень: [30-40]
+Настрій на початку: [Оптимістичний]
+Учасники:
+- [Максим] (Ініціатор)
+- [Андрій] (Переживає за терміни)
+- [Антон] (Скептик, вважає стару систему кращою)
+- [Настя] (Нейтральна)
+Завершення: [Досягнення домовленості]`;
 
 const SimulationControls: React.FC<SimulationControlsProps> = ({ users, onSendScriptMessages, onGenerateDiscussion, isGenerating, onAddUsers }) => {
     const [isOpen, setIsOpen] = useState(false);
@@ -75,6 +76,23 @@ const SimulationControls: React.FC<SimulationControlsProps> = ({ users, onSendSc
 
     const handleGenerate = async () => {
         setError(null);
+
+        // 1. Parse participant names from the prompt
+        const participantRegex = /-\s*\[([^\]]+)\]/g;
+        const matches = [...prompt.matchAll(participantRegex)];
+        const scriptUserNames = matches.map(match => match[1].trim());
+        const uniqueScriptUserNames = [...new Set(scriptUserNames)];
+
+        // 2. Find which users are new
+        const existingUserNames = users.map(u => u.name);
+        const newUserNames = uniqueScriptUserNames.filter(name => !existingUserNames.includes(name) && name.trim() !== '');
+        
+        // 3. Add new users if any
+        if (newUserNames.length > 0) {
+            onAddUsers(newUserNames);
+        }
+
+        // 4. Proceed with generating the discussion
         const generatedScript = await onGenerateDiscussion(prompt);
         if (generatedScript) {
             setScript(generatedScript);
@@ -144,7 +162,7 @@ const SimulationControls: React.FC<SimulationControlsProps> = ({ users, onSendSc
                                 value={prompt}
                                 onChange={(e) => setPrompt(e.target.value)}
                                 rows={8}
-                                className="w-full p-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500 text-xs"
+                                className="w-full p-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500 text-xs font-mono"
                                 placeholder="Опишіть сценарій дискусії..."
                             />
                             <button onClick={handleGenerate} disabled={isGenerating} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-700 text-white rounded-md hover:bg-slate-800 disabled:bg-slate-400">
