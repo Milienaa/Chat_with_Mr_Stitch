@@ -87,3 +87,8 @@ export interface SentimentAnalysis {
   summary: string;
   participantStances?: ParticipantStance[];
 }
+
+export interface SimulationMessage {
+  userName: string;
+  text: string;
+}

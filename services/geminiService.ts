@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import type { Message, ExtractedAP, SentimentAnalysis, StanceType, FollowupResult, GeneratedDocument } from '../types';
+import type { Message, ExtractedAP, SentimentAnalysis, StanceType, FollowupResult, GeneratedDocument, SimulationMessage } from '../types';
 
 if (!process.env.API_KEY) {
   throw new Error("API_KEY environment variable not set.");
@@ -170,20 +170,21 @@ export const analyzeDialogue = async (messages: Message[], currentDocument: Gene
       },
     });
 
-    const call = response.candidates?.[0]?.content?.parts?.[0]?.functionCall;
+    const call = response.functionCalls?.[0];
 
-    if (call && call.name === 'updateProjectDocument') {
-      const args = call.args as Record<string, any>;
+    if (call?.name === 'updateProjectDocument' && call.args) {
+      const args = call.args as any;
       
       const extractAP: ExtractedAP | null = args.extractAP || null;
-
+      const sentimentAnalysisRaw = args.sentimentAnalysis;
+      
       const sentimentAnalysis: SentimentAnalysis | null =
-        (args.sentimentAnalysis && args.sentimentAnalysis.tone && args.sentimentAnalysis.summary)
+        (sentimentAnalysisRaw && sentimentAnalysisRaw.tone && sentimentAnalysisRaw.summary)
           ? {
-              ...args.sentimentAnalysis,
-              participantStances: args.sentimentAnalysis.participantStances?.map((p: any) => ({
+              ...sentimentAnalysisRaw,
+              participantStances: sentimentAnalysisRaw.participantStances?.map((p: any) => ({
                 ...p,
-                stance: p.stance as StanceType, // Ensure correct typing
+                stance: p.stance as StanceType,
               }))
             }
           : null;
@@ -194,11 +195,11 @@ export const analyzeDialogue = async (messages: Message[], currentDocument: Gene
       };
     }
 
+    console.error("Gemini did not return the expected 'updateProjectDocument' function call.", response);
     return null;
 
   } catch (error) {
     console.error("Error analyzing chat with Gemini:", error);
-    // Rethrow to be caught by the UI
     throw new Error("Failed to communicate with the AI service.");
   }
 };
@@ -254,14 +255,83 @@ export const generateFollowup = async (newMessages: Message[], previousFollowup:
         systemInstruction: systemInstructionFollowup,
       },
     });
-    const call = response.candidates?.[0]?.content?.parts?.[0]?.functionCall;
-    if (call && call.name === 'createDiscussionFollowup') {
-      // Fix: Cast to unknown first to satisfy TypeScript's type assertion rules for complex objects.
-      return call.args as unknown as FollowupResult;
+
+    const call = response.functionCalls?.[0];
+    if (call?.name === 'createDiscussionFollowup' && call.args) {
+      // The args object itself should be the FollowupResult.
+      // We can add a basic check to see if it has a required property.
+      if (typeof (call.args as any).summary === 'string') {
+        // Fix: Cast to unknown first to satisfy TypeScript's type checker for complex object assertions.
+        return call.args as unknown as FollowupResult;
+      }
     }
+    
+    console.error("Gemini did not return the expected 'createDiscussionFollowup' function call.", response);
     return null;
   } catch (error) {
     console.error("Error generating followup with Gemini:", error);
     throw new Error("Failed to generate follow-up from the AI service.");
+  }
+};
+
+
+const systemInstructionDiscussionGeneration = `You are a scriptwriter AI. Your task is to generate a realistic, multi-person chat discussion based on a user's prompt.
+The prompt will specify the topic, participants, their roles (e.g., initiator, critic), the desired tone, length, and conclusion.
+You must adhere to the specified participant names.
+Your output must be a JSON array of message objects, where each object has a 'userName' and a 'text' property, conforming to the provided schema. Do not write any conversational text.
+The generated conversation must be in Ukrainian.`;
+
+
+export const generateDiscussion = async (prompt: string): Promise<SimulationMessage[] | null> => {
+  const responseSchema = {
+    type: Type.ARRAY,
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        userName: { type: Type.STRING, description: "The name of the user sending the message. Must be one of the provided participant names." },
+        text: { type: Type.STRING, description: "The content of the message." }
+      },
+      required: ["userName", "text"]
+    }
+  };
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: responseSchema,
+        systemInstruction: systemInstructionDiscussionGeneration,
+      },
+    });
+
+    if (response.text) {
+      try {
+        const parsedData = JSON.parse(response.text);
+
+        // Basic validation to ensure we got an array of the correct objects
+        if (
+          Array.isArray(parsedData) &&
+          (parsedData.length === 0 || 
+            (typeof parsedData[0] === 'object' && parsedData[0] !== null && 'userName' in parsedData[0] && 'text' in parsedData[0]))
+        ) {
+          return parsedData as SimulationMessage[];
+        } else {
+           console.error("Parsed JSON for discussion generation does not match expected schema.", { parsedData });
+           return null;
+        }
+      } catch (e) {
+        console.error("Could not parse JSON from Gemini response for discussion generation.", { error: e, text: response.text });
+        return null;
+      }
+    }
+
+    console.error("Gemini did not return a valid text response for discussion generation.", { response });
+    return null;
+
+  } catch (error) {
+    console.error("Error generating discussion with Gemini:", error);
+    throw new Error("Failed to generate discussion from the AI service.");
   }
 };
