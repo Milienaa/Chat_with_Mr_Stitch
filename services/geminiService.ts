@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import type { Message, ExtractedAP, SentimentAnalysis, StanceType, FollowupResult, GeneratedDocument, SimulationMessage } from '../types';
+import type { Message, ExtractedAP, SentimentAnalysis, StanceType, FollowupResult, GeneratedDocument, SimulationMessage, TokenUsage } from '../types';
 
 if (!process.env.API_KEY) {
   throw new Error("API_KEY environment variable not set.");
@@ -149,13 +149,13 @@ interface AnalysisResult {
   sentimentAnalysis: SentimentAnalysis | null;
 }
 
-export const analyzeDialogue = async (messages: Message[], currentDocument: GeneratedDocument): Promise<AnalysisResult | null> => {
+export const analyzeDialogue = async (messages: Message[], currentDocument: GeneratedDocument): Promise<{ result: AnalysisResult | null; usage: TokenUsage }> => {
   const chatHistory = messages
     .map(msg => `${msg.user.name}: ${msg.text}`)
     .join('\n');
 
   if (messages.length < 1) {
-    return null;
+    return { result: null, usage: { input: 0, output: 0, cached: 0, total: 0 } };
   }
   
   const prompt = `Here is the current state of the project document:\n${JSON.stringify(currentDocument, null, 2)}\n\n---\n\nHere is the full chat history:\n${chatHistory}`;
@@ -169,6 +169,13 @@ export const analyzeDialogue = async (messages: Message[], currentDocument: Gene
         systemInstruction: systemInstruction,
       },
     });
+
+    const usage: TokenUsage = {
+        input: response.usageMetadata?.promptTokenCount || 0,
+        output: response.usageMetadata?.candidatesTokenCount || 0,
+        cached: response.usageMetadata?.cachedContentTokenCount || 0,
+        total: response.usageMetadata?.totalTokenCount || 0,
+    };
 
     const call = response.functionCalls?.[0];
 
@@ -190,13 +197,16 @@ export const analyzeDialogue = async (messages: Message[], currentDocument: Gene
           : null;
 
       return {
-        extractAP,
-        sentimentAnalysis,
+        result: {
+          extractAP,
+          sentimentAnalysis,
+        },
+        usage,
       };
     }
 
     console.error("Gemini did not return the expected 'updateProjectDocument' function call.", response);
-    return null;
+    return { result: null, usage };
 
   } catch (error) {
     console.error("Error analyzing chat with Gemini:", error);
@@ -237,9 +247,9 @@ Your task is to generate a structured summary using the 'createDiscussionFollowu
 - Propose clear 'nextSteps' to guide the team.
 Your entire output must be through the 'createDiscussionFollowup' tool. The response must be in Ukrainian.`;
 
-export const generateFollowup = async (newMessages: Message[], previousFollowup: FollowupResult | null): Promise<FollowupResult | null> => {
+export const generateFollowup = async (newMessages: Message[], previousFollowup: FollowupResult | null): Promise<{ result: FollowupResult | null; usage: TokenUsage }> => {
   const newChatHistory = newMessages.map(msg => `${msg.user.name}: ${msg.text}`).join('\n');
-  if (newMessages.length === 0) return null;
+  if (newMessages.length === 0) return { result: null, usage: { input: 0, output: 0, cached: 0, total: 0 } };
 
   let prompt = `Here is the new conversation to analyze:\n\n${newChatHistory}`;
   if (previousFollowup) {
@@ -256,18 +266,22 @@ export const generateFollowup = async (newMessages: Message[], previousFollowup:
       },
     });
 
+    const usage: TokenUsage = {
+        input: response.usageMetadata?.promptTokenCount || 0,
+        output: response.usageMetadata?.candidatesTokenCount || 0,
+        cached: response.usageMetadata?.cachedContentTokenCount || 0,
+        total: response.usageMetadata?.totalTokenCount || 0,
+    };
+
     const call = response.functionCalls?.[0];
     if (call?.name === 'createDiscussionFollowup' && call.args) {
-      // The args object itself should be the FollowupResult.
-      // We can add a basic check to see if it has a required property.
       if (typeof (call.args as any).summary === 'string') {
-        // Fix: Cast to unknown first to satisfy TypeScript's type checker for complex object assertions.
-        return call.args as unknown as FollowupResult;
+        return { result: call.args as unknown as FollowupResult, usage };
       }
     }
     
     console.error("Gemini did not return the expected 'createDiscussionFollowup' function call.", response);
-    return null;
+    return { result: null, usage };
   } catch (error) {
     console.error("Error generating followup with Gemini:", error);
     throw new Error("Failed to generate follow-up from the AI service.");

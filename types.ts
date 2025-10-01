@@ -92,3 +92,10 @@ export interface SimulationMessage {
   userName: string;
   text: string;
 }
+
+export interface TokenUsage {
+  input: number;
+  output: number;
+  cached: number;
+  total: number;
+}

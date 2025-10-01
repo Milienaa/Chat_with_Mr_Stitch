@@ -1,10 +1,11 @@
 import React, { useState, useCallback } from 'react';
-import type { Message, User, GeneratedDocument, SentimentAnalysis, FollowupResult, ExtractedAP, SimulationMessage } from './types';
+import type { Message, User, GeneratedDocument, SentimentAnalysis, FollowupResult, ExtractedAP, SimulationMessage, TokenUsage } from './types';
 import ChatView from './components/ChatView';
 import DocumentPanel from './components/DocumentPanel';
 import { analyzeDialogue, generateFollowup, generateDiscussion } from './services/geminiService';
 import { Bot } from 'lucide-react';
 import { formatFollowupToMessage } from './utils';
+import TokenUsageDisplay from './components/TokenUsageDisplay';
 
 const INITIAL_USERS: { [key: string]: User } = {
   '1': { id: '1', name: 'Максим', avatarUrl: 'https://avatar.iran.liara.run/public/boy?username=maksym' },
@@ -27,10 +28,12 @@ const INITIAL_DOCUMENT: GeneratedDocument = {
 
 const App: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [users, setUsers] = useState<Record<string, User>>(INITIAL_USERS);
+  // Fix: Explicitly type the state to ensure correct type inference for `users` object. This resolves both errors.
+  const [users, setUsers] = useState<{ [key: string]: User }>(INITIAL_USERS);
   const [currentUser, setCurrentUser] = useState<User>(INITIAL_USERS['1']);
   const [document, setDocument] = useState<GeneratedDocument>(INITIAL_DOCUMENT);
   const [sentiment, setSentiment] = useState<SentimentAnalysis | null>(null);
+  const [tokenUsage, setTokenUsage] = useState<TokenUsage>({ input: 0, output: 0, cached: 0, total: 0 });
   
   // Loading states
   const [isAnalyzing, setIsAnalyzing] = useState(false); // For panel loading (silent analysis)
@@ -45,6 +48,17 @@ const App: React.FC = () => {
   const runAnalysis = useCallback(async (currentMessages: Message[], isFollowup: boolean) => {
     if (currentMessages.length === 0) return;
 
+    const handleTokenUpdate = (usage: TokenUsage | null) => {
+        if (usage) {
+            setTokenUsage(prev => ({
+                input: prev.input + (usage.input || 0),
+                output: prev.output + (usage.output || 0),
+                cached: prev.cached + (usage.cached || 0),
+                total: prev.total + (usage.total || 0),
+            }));
+        }
+    };
+
     if (isFollowup) {
       setIsGeneratingFollowup(true);
     } else {
@@ -55,7 +69,9 @@ const App: React.FC = () => {
     try {
       if (isFollowup) {
         const newMessagesForFollowup = currentMessages.slice(lastFollowupMessageIndex);
-        const followupResult = await generateFollowup(newMessagesForFollowup, lastFollowup);
+        // Агент "Follow-up": Підраховуємо токени для генерації звіту-підсумку
+        const { result: followupResult, usage } = await generateFollowup(newMessagesForFollowup, lastFollowup);
+        handleTokenUpdate(usage);
 
         if (followupResult) {
           const aiMessageText = formatFollowupToMessage(followupResult);
@@ -73,8 +89,9 @@ const App: React.FC = () => {
             setAnalysisError("Не вдалося згенерувати звіт.");
         }
       } else {
-        // Default behavior: analyze for action points silently
-        const analysisResult = await analyzeDialogue(currentMessages, document);
+        // Агент "Аналітик": Підраховуємо токени для генерації проєктного документу (Action Points) та аналізу настрою діалогу
+        const { result: analysisResult, usage } = await analyzeDialogue(currentMessages, document);
+        handleTokenUpdate(usage);
         
         if (analysisResult?.sentimentAnalysis) {
             setSentiment(analysisResult.sentimentAnalysis);
@@ -139,6 +156,7 @@ const App: React.FC = () => {
   const handleGenerateDiscussion = useCallback(async (prompt: string): Promise<SimulationMessage[] | null> => {
     setIsGeneratingDiscussion(true);
     try {
+      // Генерація дискусії не враховується в загальній сумі токенів згідно з вимогою
       const result = await generateDiscussion(prompt);
       return result;
     } catch (error) {
@@ -151,11 +169,9 @@ const App: React.FC = () => {
   }, []);
   
   const handleAddUsers = useCallback((newUserNames: string[]) => {
-    setUsers((currentUsers: Record<string, User>) => {
-      // варіант 1: через generic
+    setUsers(currentUsers => {
       const existingNames = Object.values<User>(currentUsers).map(u => u.name);
-    
-      const usersToAdd: Record<string, User> = {};
+      const usersToAdd: { [key: string]: User } = {};
       let newIdCounter = Object.keys(currentUsers).length + 1;
 
       newUserNames.forEach(name => {
@@ -186,6 +202,7 @@ const App: React.FC = () => {
           <Bot size={24} className="text-cyan-500" />
           <h1 className="text-xl font-bold text-slate-800">Чат з Mr Stitch</h1>
         </div>
+        <TokenUsageDisplay usage={tokenUsage} />
       </header>
       <main className="flex flex-row flex-1 overflow-hidden bg-slate-50">
         <DocumentPanel 
@@ -195,17 +212,18 @@ const App: React.FC = () => {
           error={analysisError}
         />
         <ChatView
-  messages={messages}
-  onSendMessage={handleSendMessage}
-  isAiThinking={isGeneratingFollowup}
-  users={Object.values<User>(users).filter(u => u.id !== 'ai')}
-  currentUser={currentUser}
-  onSetCurrentUser={setCurrentUser}
-  onSendScriptMessages={handleSendScriptMessages}
-  onGenerateDiscussion={handleGenerateDiscussion}
-  isGeneratingDiscussion={isGeneratingDiscussion}
-  onAddUsers={handleAddUsers}
-/>
+          messages={messages}
+          onSendMessage={handleSendMessage}
+          isAiThinking={isGeneratingFollowup}
+          users={Object.values<User>(users).filter(u => u.id !== 'ai')}
+          currentUser={currentUser}
+          onSetCurrentUser={setCurrentUser}
+          // Pass new props
+          onSendScriptMessages={handleSendScriptMessages}
+          onGenerateDiscussion={handleGenerateDiscussion}
+          isGeneratingDiscussion={isGeneratingDiscussion}
+          onAddUsers={handleAddUsers}
+        />
       </main>
     </div>
   );
